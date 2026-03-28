@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"log"
 	"net/http"
 	"time"
@@ -19,9 +19,9 @@ const (
 )
 
 var (
-	Resolution map[string]string
-	Markets    map[string]bool
-	cache      *bigcache.BigCache
+	Resolution     map[string]string
+	FullResolution map[string]string
+	cache          *bigcache.BigCache
 )
 
 func init() {
@@ -31,18 +31,23 @@ func init() {
 		"3840": "UHD.jpg",
 	}
 
-	Markets = map[string]bool{
-		"en-US": true,
-		"zh-CN": true,
-		"ja-JP": true,
-		"en-AU": true,
-		"en-GB": true,
-		"de-DE": true,
-		"en-NZ": true,
-		"en-CA": true,
-		"en-IN": true,
-		"fr-FR": true,
-		"fr-CA": true,
+	FullResolution = map[string]string{
+		"UHD":       "UHD.jpg",
+		"1920x1200": "1920x1200.jpg",
+		"1920x1080": "1920x1080.jpg",
+		"1366x768":  "1366x768.jpg",
+		"1280x768":  "1280x768.jpg",
+		"1024x768":  "1024x768.jpg",
+		"800x600":   "800x600.jpg",
+		"800x480":   "800x480.jpg",
+		"1080x1920": "1080x1920.jpg",
+		"768x1280":  "768x1280.jpg",
+		"720x1280":  "720x1280.jpg",
+		"640x480":   "640x480.jpg",
+		"480x800":   "480x800.jpg",
+		"400x240":   "400x240.jpg",
+		"320x240":   "320x240.jpg",
+		"240x320":   "240x320.jpg",
 	}
 
 	// initialize the cache
@@ -68,11 +73,20 @@ func init() {
 // Get bing.com wallpaper from bing api
 func Get(index uint, market, resolution string) (*Response, error) {
 	if _, ok := Resolution[resolution]; !ok {
-		return nil, fmt.Errorf("resolution %s is not supported", resolution)
+		// get the full resolution
+		if _, ok := FullResolution[resolution]; !ok {
+			return nil, fmt.Errorf("resolution %s is not supported", resolution)
+		}
 	}
 
-	if _, ok := Markets[market]; !ok {
-		return nil, fmt.Errorf("market %s is not supported", market)
+	// fetch from the old resolution
+	if _, ok := Resolution[resolution]; ok {
+		resolution = Resolution[resolution]
+	}
+
+	// replace the resolution with the full resolution
+	if _, ok := FullResolution[resolution]; ok {
+		resolution = FullResolution[resolution]
 	}
 
 	// query cache first
@@ -91,7 +105,7 @@ func Get(index uint, market, resolution string) (*Response, error) {
 		return nil, err
 	}
 	request.Header.Add("Referer", bingURL)
-	request.Header.Add("User-Agent", `Mozilla/4.0 (compatible; MSIE 7.0; Windows NT 10.0; WOW64; Trident/8.0; .NET4.0C; .NET4.0E)`)
+	request.Header.Add("User-Agent", `Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0`)
 
 	resp, err := client.Do(request)
 	if err != nil {
@@ -99,7 +113,7 @@ func Get(index uint, market, resolution string) (*Response, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := ioutil.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse request body from %s", bingURL)
 	}
@@ -109,13 +123,21 @@ func Get(index uint, market, resolution string) (*Response, error) {
 		return nil, err
 	}
 
-	// get image element
-	imgElem := doc.SelectElement("images").SelectElement("image")
+	// get image element - root element is "images"
+	root := doc.Root()
+	if root == nil {
+		return nil, fmt.Errorf("failed to parse XML response from %s", bingURL)
+	}
+
+	imgElem := root.SelectElement("image")
+	if imgElem == nil {
+		return nil, fmt.Errorf("failed to find 'image' element in response from %s", bingURL)
+	}
 
 	response := &Response{
 		StartDate:     imgElem.SelectElement("startdate").Text(),
 		EndDate:       imgElem.SelectElement("enddate").Text(),
-		URL:           fmt.Sprintf("%s%s_%s", bingURL, imgElem.SelectElement("urlBase").Text(), Resolution[resolution]),
+		URL:           fmt.Sprintf("%s%s_%s", bingURL, imgElem.SelectElement("urlBase").Text(), resolution),
 		Copyright:     imgElem.SelectElement("copyright").Text(),
 		CopyrightLink: imgElem.SelectElement("copyrightlink").Text(),
 	}
